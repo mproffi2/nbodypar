@@ -23,11 +23,11 @@ public:
     }
 
     void parfor(size_t begin, size_t end, const std::function<void(size_t)> &func) const {
-    #pragma omp parallel for schedule(static, 1) num_threads(nbThread)
+        #pragma omp parallel for schedule(static, granularity) num_threads(nbThread)
         for (size_t i = begin; i < end; i++) {
             func(i);
         }
     }
 };
 
-#endif 
+#endif
