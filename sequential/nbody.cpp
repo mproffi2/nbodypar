@@ -220,6 +220,9 @@ int main(int argc, char* argv[]) {
   omp.setNbThread(nbthreads);
   omp.setGranularity(1);
 
+  // start timing
+  auto start_time = std::chrono::high_resolution_clock::now();
+
   for (size_t step = 0; step< nbstep; step++) {
     if (step %printevery == 0)
       dump_state(s);
@@ -269,6 +272,11 @@ int main(int argc, char* argv[]) {
       s.z[i] += s.vz[i]*dt;
     });
   }
-  
+
+  // end timing
+  auto end_time = std::chrono::high_resolution_clock::now();
+  std::chrono::duration<double> elapsed = end_time - start_time;
+  std::cerr << "Simulation time: " << elapsed.count() << " seconds\n";
+
   return 0;
 }
