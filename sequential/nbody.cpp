@@ -4,7 +4,6 @@
 #include <cmath>
 #include <vector>
 #include <string>
-#include <chrono>
 #include "omp_loop.hpp"
 
 double G = 6.674*std::pow(10,-11);
@@ -12,7 +11,7 @@ double G = 6.674*std::pow(10,-11);
 
 struct simulation {
   size_t nbpart;
-
+  
   std::vector<double> mass;
 
   //position
@@ -30,6 +29,7 @@ struct simulation {
   std::vector<double> fy;
   std::vector<double> fz;
 
+  
   simulation(size_t nb)
     :nbpart(nb), mass(nb),
      x(nb), y(nb), z(nb),
@@ -37,6 +37,7 @@ struct simulation {
      fx(nb), fy(nb), fz(nb) 
   {}
 };
+
 
 void random_init(simulation& s) {
   std::random_device rd;  
@@ -78,6 +79,7 @@ void random_init(simulation& s) {
     s.vy[i] -= meanmassvy/meanmass;
     s.vz[i] -= meanmassvz/meanmass;
   }
+  
 }
 
 void init_solar(simulation& s) {
@@ -179,94 +181,94 @@ void load_from_file(simulation& s, std::string filename) {
 }
 
 int main(int argc, char* argv[]) {
-    if (argc != 6) {
-        std::cerr << "usage: " << argv[0] << " <input> <dt> <nbstep> <printevery> <nbthreads>\n"
-                  << "input can be:\n"
-                  << "a number (random initialization)\n"
-                  << "planet (initialize with solar system)\n"
-                  << "a filename (load from file in singleline tsv)\n";
-        return -1;
-    }
+  if (argc != 6) {
+    std::cerr
+      <<"usage: "<<argv[0]<<" <input> <dt> <nbstep> <printevery> <nbthreads>"<<"\n"
+      <<"input can be:"<<"\n"
+      <<"a number (random initialization)"<<"\n"
+      <<"planet (initialize with solar system)"<<"\n"
+      <<"a filename (load from file in singleline tsv)"<<"\n";
+    return -1;
+  }
+  
+  double dt = std::atof(argv[2]); //in seconds
+  size_t nbstep = std::atol(argv[3]);
+  size_t printevery = std::atol(argv[4]);
+  int nbthreads = std::atoi(argv[5]);
+  if (nbthreads < 1) nbthreads = 1;
 
-    double dt = std::atof(argv[2]);
-    size_t nbstep = std::atol(argv[3]);
-    size_t printevery = std::atol(argv[4]);
-    int nbthreads = std::atoi(argv[5]);
-    if (nbthreads < 1) nbthreads = 1;
+  simulation s(1);
 
-    simulation s(1);
-
-    // parse input
-    size_t nbpart = std::atol(argv[1]);
-    if (nbpart > 0) {
-        s = simulation(nbpart);
-        random_init(s);
+  //parse command line
+  {
+    size_t nbpart = std::atol(argv[1]); //return 0 if not a number
+    if ( nbpart > 0) {
+      s = simulation(nbpart);
+      random_init(s);
     } else {
-        std::string inputparam = argv[1];
-        if (inputparam == "planet") {
-            init_solar(s);
-        } else {
-            load_from_file(s, inputparam);
-        }
-    }
+      std::string inputparam = argv[1];
+      if (inputparam == "planet") {
+	init_solar(s);
+      } else{
+	load_from_file(s, inputparam);
+      }
+    }    
+  }
 
-    // set up OmpLoop
-    OmpLoop omp;
-    omp.setNbThread(nbthreads);
-    omp.setGranularity(1);
+  // set up OmpLoop wrapper
+  OmpLoop omp;
+  omp.setNbThread(nbthreads);
+  omp.setGranularity(1);
 
-    // start timing
-    auto start_time = std::chrono::high_resolution_clock::now();
+  for (size_t step = 0; step< nbstep; step++) {
+    if (step %printevery == 0)
+      dump_state(s);
+  
+    // reset forces in parallel using OmpLoop
+    omp.parfor(0, s.nbpart, [&](size_t i) {
+      s.fx[i] = 0.;
+      s.fy[i] = 0.;
+      s.fz[i] = 0.;
+    });
 
-    for (size_t step = 0; step < nbstep; ++step) {
-        if (step % printevery == 0)
-            dump_state(s);
+    // compute forces: parallel outer loop over target particle i (each thread computes full sum for its i)
+    omp.parfor(0, s.nbpart, [&](size_t i) {
+      double softening = .1;
+      double fx = 0.0;
+      double fy = 0.0;
+      double fz = 0.0;
+      for (size_t j = 0; j < s.nbpart; ++j) {
+        if (i == j) continue;
+        double dx = s.x[i] - s.x[j];
+        double dy = s.y[i] - s.y[j];
+        double dz = s.z[i] - s.z[j];
+        double dist_sq = dx*dx + dy*dy + dz*dz;
+        double F = G * s.mass[i] * s.mass[j] / (dist_sq + softening);
+        double norm = std::sqrt(dx*dx + dy*dy + dz*dz);
+        if (norm == 0.0) continue;
+        double ux = dx / norm;
+        double uy = dy / norm;
+        double uz = dz / norm;
+        fx += ux * F;
+        fy += uy * F;
+        fz += uz * F;
+      }
+      s.fx[i] = fx;
+      s.fy[i] = fy;
+      s.fz[i] = fz;
+    });
 
-        // reset forces in parallel
-        omp.parfor(0, s.nbpart, [&](size_t i) {
-            s.fx[i] = 0.;
-            s.fy[i] = 0.;
-            s.fz[i] = 0.;
-        });
+    // apply forces and update positions in parallel using OmpLoop
+    omp.parfor(0, s.nbpart, [&](size_t i) {
+      s.vx[i] += s.fx[i]/s.mass[i]*dt;
+      s.vy[i] += s.fy[i]/s.mass[i]*dt;
+      s.vz[i] += s.fz[i]/s.mass[i]*dt;
 
-        // compute forces in parallel
-        omp.parfor(0, s.nbpart, [&](size_t i) {
-            double softening = .1;
-            double fx = 0.0, fy = 0.0, fz = 0.0;
-            for (size_t j = 0; j < s.nbpart; ++j) {
-                if (i == j) continue;
-                double dx = s.x[i] - s.x[j];
-                double dy = s.y[i] - s.y[j];
-                double dz = s.z[i] - s.z[j];
-                double dist_sq = dx*dx + dy*dy + dz*dz;
-                double F = G * s.mass[i] * s.mass[j] / (dist_sq + softening);
-                double norm = std::sqrt(dist_sq);
-                if (norm == 0.0) continue;
-                fx += dx / norm * F;
-                fy += dy / norm * F;
-                fz += dz / norm * F;
-            }
-            s.fx[i] = fx;
-            s.fy[i] = fy;
-            s.fz[i] = fz;
-        });
-
-        // update velocities and positions in parallel
-        omp.parfor(0, s.nbpart, [&](size_t i) {
-            s.vx[i] += s.fx[i]/s.mass[i]*dt;
-            s.vy[i] += s.fy[i]/s.mass[i]*dt;
-            s.vz[i] += s.fz[i]/s.mass[i]*dt;
-
-            s.x[i] += s.vx[i]*dt;
-            s.y[i] += s.vy[i]*dt;
-            s.z[i] += s.vz[i]*dt;
-        });
-    }
-
-    // end timing
-    auto end_time = std::chrono::high_resolution_clock::now();
-    std::chrono::duration<double> elapsed = end_time - start_time;
-    std::cerr << "Simulation completed in " << elapsed.count() << " seconds\n";
-
-    return 0;
+      s.x[i] += s.vx[i]*dt;
+      s.y[i] += s.vy[i]*dt;
+      s.z[i] += s.vz[i]*dt;
+    });
+  }
+  
+  return 0;
 }
