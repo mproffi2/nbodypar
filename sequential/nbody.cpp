@@ -2,6 +2,10 @@
 #include <fstream>
 #include <random>
 #include <cmath>
+#include <vector>
+#include <chrono>
+#include <string>
+#include "omp_loop.hpp"
 
 double G = 6.674*std::pow(10,-11);
 //double G = 1;
@@ -178,9 +182,9 @@ void load_from_file(simulation& s, std::string filename) {
 }
 
 int main(int argc, char* argv[]) {
-  if (argc != 5) {
+  if (argc != 6) {
     std::cerr
-      <<"usage: "<<argv[0]<<" <input> <dt> <nbstep> <printevery>"<<"\n"
+      <<"usage: "<<argv[0]<<" <input> <dt> <nbstep> <printevery> <nbthreads>"<<"\n"
       <<"input can be:"<<"\n"
       <<"a number (random initialization)"<<"\n"
       <<"planet (initialize with solar system)"<<"\n"
@@ -188,11 +192,12 @@ int main(int argc, char* argv[]) {
     return -1;
   }
   
-  double dt = std::atof(argv[2]); //in seconds
+  double dt = std::atof(argv[2]); 
   size_t nbstep = std::atol(argv[3]);
   size_t printevery = std::atol(argv[4]);
-  
-  
+  int nbthreads = std::atoi(argv[5]);
+  if (nbthreads < 1) nbthreads = 1;
+
   simulation s(1);
 
   //parse command line
@@ -204,32 +209,75 @@ int main(int argc, char* argv[]) {
     } else {
       std::string inputparam = argv[1];
       if (inputparam == "planet") {
-	init_solar(s);
+        init_solar(s);
       } else{
-	load_from_file(s, inputparam);
+        load_from_file(s, inputparam);
       }
     }    
   }
 
-  
+  // OmpLoop wrapper
+  OmpLoop omp;
+  omp.setNbThread(nbthreads);
+  omp.setGranularity(1);
+
+  // start timing
+  auto start = std::chrono::high_resolution_clock::now();
+
   for (size_t step = 0; step< nbstep; step++) {
     if (step %printevery == 0)
       dump_state(s);
   
-    reset_force(s);
-    for (size_t i=0; i<s.nbpart; ++i)
-      for (size_t j=0; j<s.nbpart; ++j)
-	if (i != j)
-	  update_force(s, i, j);
+    // reset forces in parallel
+    omp.parfor(0, s.nbpart, [&](size_t i) {
+      s.fx[i] = 0.;
+      s.fy[i] = 0.;
+      s.fz[i] = 0.;
+    });
 
-    for (size_t i=0; i<s.nbpart; ++i) {
-      apply_force(s, i, dt);
-      update_position(s, i, dt);
-    }
+    // compute forces
+    omp.parfor(0, s.nbpart, [&](size_t i) {
+      double softening = .1;
+      double fx = 0.0;
+      double fy = 0.0;
+      double fz = 0.0;
+      for (size_t j = 0; j < s.nbpart; ++j) {
+        if (i == j) continue;
+        double dx = s.x[i] - s.x[j];
+        double dy = s.y[i] - s.y[j];
+        double dz = s.z[i] - s.z[j];
+        double dist_sq = dx*dx + dy*dy + dz*dz;
+        double F = G * s.mass[i] * s.mass[j] / (dist_sq + softening);
+        double norm = std::sqrt(dx*dx + dy*dy + dz*dz);
+        if (norm == 0.0) continue;
+        double ux = dx / norm;
+        double uy = dy / norm;
+        double uz = dz / norm;
+        fx += ux * F;
+        fy += uy * F;
+        fz += uz * F;
+      }
+      s.fx[i] = fx;
+      s.fy[i] = fy;
+      s.fz[i] = fz;
+    });
+
+    // apply forces/updated positions
+    omp.parfor(0, s.nbpart, [&](size_t i) {
+      s.vx[i] += s.fx[i]/s.mass[i]*dt;
+      s.vy[i] += s.fy[i]/s.mass[i]*dt;
+      s.vz[i] += s.fz[i]/s.mass[i]*dt;
+
+      s.x[i] += s.vx[i]*dt;
+      s.y[i] += s.vy[i]*dt;
+      s.z[i] += s.vz[i]*dt;
+    });
   }
-  
-  //dump_state(s);  
 
+  // end timing and print
+  auto end = std::chrono::high_resolution_clock::now();
+  std::chrono::duration<double> elapsed = end - start;
+  std::cout << "Simulation took " << elapsed.count() << " seconds.\n";
 
   return 0;
 }
