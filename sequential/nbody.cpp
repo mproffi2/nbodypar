@@ -2,8 +2,8 @@
 #include <fstream>
 #include <random>
 #include <cmath>
-#include "omp_loop.hpp" // added this for OmpLoop
-#include <omp.h> // for timing
+#include "omp_loop.hpp"
+#include <omp.h> // added for timing
 
 double G = 6.674*std::pow(10,-11);
 //double G = 1;
@@ -180,9 +180,9 @@ void load_from_file(simulation& s, std::string filename) {
 }
 
 int main(int argc, char* argv[]) {
-  if (argc != 5) {
+  if (argc != 6) {
     std::cerr
-      <<"usage: "<<argv[0]<<" <input> <dt> <nbstep> <printevery>"<<"\n"
+      <<"usage: "<<argv[0]<<" <input> <dt> <nbstep> <printevery> <nbthreads>"<<"\n"
       <<"input can be:"<<"\n"
       <<"a number (random initialization)"<<"\n"
       <<"planet (initialize with solar system)"<<"\n"
@@ -193,6 +193,7 @@ int main(int argc, char* argv[]) {
   double dt = std::atof(argv[2]); //in seconds
   size_t nbstep = std::atol(argv[3]);
   size_t printevery = std::atol(argv[4]);
+  int nbthreads = std::atoi(argv[5]); // added: number of threads from CLI
   
   simulation s(1);
 
@@ -205,17 +206,18 @@ int main(int argc, char* argv[]) {
     } else {
       std::string inputparam = argv[1];
       if (inputparam == "planet") {
-	init_solar(s);
+    init_solar(s);
       } else{
-	load_from_file(s, inputparam);
+    load_from_file(s, inputparam);
       }
     }    
   }
 
-  OmpLoop loop; 
-  loop.setNbThread(4); // added: using 4 threads (can adjust)
+  OmpLoop loop;
+  loop.setNbThread(nbthreads); // added: use CLI thread count
+  loop.setGranularity(1);
 
-  double start = omp_get_wtime(); // added timing start
+  double start = omp_get_wtime(); // added: start timing
 
   for (size_t step = 0; step< nbstep; step++) {
     if (step %printevery == 0)
@@ -223,22 +225,25 @@ int main(int argc, char* argv[]) {
   
     reset_force(s);
 
-    // changed this part to use parallel loop
+    // outer loop parallelized using OmpLoop (each thread computes forces for its particle)
     loop.parfor(0, s.nbpart, [&](size_t i) {
       for (size_t j=0; j<s.nbpart; ++j)
-        if (i != j)
-          update_force(s, i, j);
+    if (i != j)
+      update_force(s, i, j);
     });
 
-    // kept same logic, just used parallel loop too
+    // parallel integrate velocities & positions
     loop.parfor(0, s.nbpart, [&](size_t i) {
       apply_force(s, i, dt);
       update_position(s, i, dt);
     });
   }
+  
+  double end = omp_get_wtime(); // added: end timing
+  std::cout << "Elapsed time: " << (end - start) << " seconds\n"; // added: simple runtime print
 
-  double end = omp_get_wtime(); // added timing end
-  std::cout << "Elapsed time: " << (end - start) << " seconds\n"; // quick print for runtime
+  //dump_state(s);  
+
 
   return 0;
 }
