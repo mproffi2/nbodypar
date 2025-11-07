@@ -3,43 +3,40 @@
 #include <random>
 #include <cmath>
 #include "omp_loop.hpp"
-#include <omp.h> // added for timing
+#include <omp.h> // for timing
 
 double G = 6.674*std::pow(10,-11);
-//double G = 1;
 
 struct simulation {
   size_t nbpart;
   
   std::vector<double> mass;
 
-  //position
+  // position
   std::vector<double> x;
   std::vector<double> y;
   std::vector<double> z;
 
-  //velocity
+  // velocity
   std::vector<double> vx;
   std::vector<double> vy;
   std::vector<double> vz;
 
-  //force
+  // force
   std::vector<double> fx;
   std::vector<double> fy;
   std::vector<double> fz;
 
-  
   simulation(size_t nb)
-    :nbpart(nb), mass(nb),
-     x(nb), y(nb), z(nb),
-     vx(nb), vy(nb), vz(nb),
-     fx(nb), fy(nb), fz(nb) 
+    : nbpart(nb), mass(nb),
+      x(nb), y(nb), z(nb),
+      vx(nb), vy(nb), vz(nb),
+      fx(nb), fy(nb), fz(nb)
   {}
 };
 
-
 void random_init(simulation& s) {
-  std::random_device rd;  
+  std::random_device rd;
   std::mt19937 gen(rd());
   std::uniform_real_distribution dismass(0.9, 1.);
   std::normal_distribution dispos(0., 1.);
@@ -50,42 +47,18 @@ void random_init(simulation& s) {
 
     s.x[i] = dispos(gen);
     s.y[i] = dispos(gen);
-    s.z[i] = dispos(gen);
     s.z[i] = 0.;
     
-    s.vx[i] = disvel(gen);
-    s.vy[i] = disvel(gen);
-    s.vz[i] = disvel(gen);
-    s.vz[i] = 0.;
     s.vx[i] = s.y[i]*1.5;
     s.vy[i] = -s.x[i]*1.5;
+    s.vz[i] = 0.;
   }
-
-  return;
-  //normalize velocity (using normalization found on some physicis blog)
-  double meanmass = 0;
-  double meanmassvx = 0;
-  double meanmassvy = 0;
-  double meanmassvz = 0;
-  for (size_t i = 0; i<s.nbpart; ++i) {
-    meanmass += s.mass[i];
-    meanmassvx += s.mass[i] * s.vx[i];
-    meanmassvy += s.mass[i] * s.vy[i];
-    meanmassvz += s.mass[i] * s.vz[i];
-  }
-  for (size_t i = 0; i<s.nbpart; ++i) {
-    s.vx[i] -= meanmassvx/meanmass;
-    s.vy[i] -= meanmassvy/meanmass;
-    s.vz[i] -= meanmassvz/meanmass;
-  }
-  
 }
 
 void init_solar(simulation& s) {
   enum Planets {SUN, MERCURY, VENUS, EARTH, MARS, JUPITER, SATURN, URANUS, NEPTUNE, MOON};
   s = simulation(10);
 
-  // Masses in kg
   s.mass[SUN] = 1.9891 * std::pow(10, 30);
   s.mass[MERCURY] = 3.285 * std::pow(10, 23);
   s.mass[VENUS] = 4.867 * std::pow(10, 24);
@@ -97,40 +70,15 @@ void init_solar(simulation& s) {
   s.mass[NEPTUNE] = 1.024 * std::pow(10, 26);
   s.mass[MOON] = 7.342 * std::pow(10, 22);
 
-  // Positions (in meters) and velocities (in m/s)
-  double AU = 1.496 * std::pow(10, 11); // Astronomical Unit
+  double AU = 1.496 * std::pow(10, 11);
 
   s.x = {0, 0.39*AU, 0.72*AU, 1.0*AU, 1.52*AU, 5.20*AU, 9.58*AU, 19.22*AU, 30.05*AU, 1.0*AU + 3.844*std::pow(10, 8)};
-  s.y = {0, 0, 0, 0, 0, 0, 0, 0, 0, 0};
-  s.z = {0, 0, 0, 0, 0, 0, 0, 0, 0, 0};
+  s.y = {0,0,0,0,0,0,0,0,0,0};
+  s.z = {0,0,0,0,0,0,0,0,0,0};
 
-  s.vx = {0, 0, 0, 0, 0, 0, 0, 0, 0, 0};
-  s.vy = {0, 47870, 35020, 29780, 24130, 13070, 9680, 6800, 5430, 29780 + 1022};
-  s.vz = {0, 0, 0, 0, 0, 0, 0, 0, 0, 0};
-}
-
-//meant to update the force that from applies on to
-void update_force(simulation& s, size_t from, size_t to) {
-  double softening = .1;
-  double dist_sq = std::pow(s.x[from]-s.x[to],2)
-    + std::pow(s.y[from]-s.y[to],2)
-    + std::pow(s.z[from]-s.z[to],2);
-  double F = G * s.mass[from]*s.mass[to]/(dist_sq+softening); //that the strength of the force
-
-  //direction
-  double dx = s.x[from]-s.x[to];
-  double dy = s.y[from]-s.y[to];
-  double dz = s.z[from]-s.z[to];
-  double norm = std::sqrt(dx*dx+dy*dy+dz*dz);
-  
-  dx = dx/norm;
-  dy = dy/norm;
-  dz = dz/norm;
-
-  //apply force
-  s.fx[to] += dx*F;
-  s.fy[to] += dy*F;
-  s.fz[to] += dz*F;
+  s.vx = {0,0,0,0,0,0,0,0,0,0};
+  s.vy = {0,47870,35020,29780,24130,13070,9680,6800,5430,29780+1022};
+  s.vz = {0,0,0,0,0,0,0,0,0,0};
 }
 
 void reset_force(simulation& s) {
@@ -139,6 +87,21 @@ void reset_force(simulation& s) {
     s.fy[i] = 0.;
     s.fz[i] = 0.;
   }
+}
+
+// compute force on particle i due to particle j
+void compute_force_on_i(const simulation& s, size_t i, size_t j, double &fx, double &fy, double &fz) {
+  double softening = 0.1;
+  double dx = s.x[j] - s.x[i];
+  double dy = s.y[j] - s.y[i];
+  double dz = s.z[j] - s.z[i];
+  double dist_sq = dx*dx + dy*dy + dz*dz + softening;
+  double dist = std::sqrt(dist_sq);
+  double F = G * s.mass[i] * s.mass[j] / dist_sq;
+
+  fx += F * dx / dist;
+  fy += F * dy / dist;
+  fz += F * dz / dist;
 }
 
 void apply_force(simulation& s, size_t i, double dt) {
@@ -165,7 +128,7 @@ void dump_state(simulation& s) {
 }
 
 void load_from_file(simulation& s, std::string filename) {
-  std::ifstream in (filename);
+  std::ifstream in(filename);
   size_t nbpart;
   in>>nbpart;
   s = simulation(nbpart);
@@ -189,61 +152,61 @@ int main(int argc, char* argv[]) {
       <<"a filename (load from file in singleline tsv)"<<"\n";
     return -1;
   }
-  
-  double dt = std::atof(argv[2]); //in seconds
+
+  double dt = std::atof(argv[2]);
   size_t nbstep = std::atol(argv[3]);
   size_t printevery = std::atol(argv[4]);
-  int nbthreads = std::atoi(argv[5]); // added: number of threads from CLI
-  
+  int nbthreads = std::atoi(argv[5]);
+
   simulation s(1);
 
-  //parse command line
+  // parse input
   {
-    size_t nbpart = std::atol(argv[1]); //return 0 if not a number
-    if ( nbpart > 0) {
+    size_t nbpart = std::atol(argv[1]);
+    if (nbpart > 0) {
       s = simulation(nbpart);
       random_init(s);
     } else {
       std::string inputparam = argv[1];
-      if (inputparam == "planet") {
-    init_solar(s);
-      } else{
-    load_from_file(s, inputparam);
-      }
-    }    
+      if (inputparam == "planet")
+        init_solar(s);
+      else
+        load_from_file(s, inputparam);
+    }
   }
 
   OmpLoop loop;
-  loop.setNbThread(nbthreads); // added: use CLI thread count
+  loop.setNbThread(nbthreads);
   loop.setGranularity(1);
 
-  double start = omp_get_wtime(); // added: start timing
+  double start = omp_get_wtime();
 
-  for (size_t step = 0; step< nbstep; step++) {
-    if (step %printevery == 0)
+  for (size_t step = 0; step < nbstep; step++) {
+    if (step % printevery == 0)
       dump_state(s);
-  
+
     reset_force(s);
 
-    // outer loop parallelized using OmpLoop (each thread computes forces for its particle)
+    // parallel force calculation
     loop.parfor(0, s.nbpart, [&](size_t i) {
+      double fx=0., fy=0., fz=0.;
       for (size_t j=0; j<s.nbpart; ++j)
-    if (i != j)
-      update_force(s, i, j);
+        if (i != j)
+          compute_force_on_i(s, i, j, fx, fy, fz);
+      s.fx[i] = fx;
+      s.fy[i] = fy;
+      s.fz[i] = fz;
     });
 
-    // parallel integrate velocities & positions
+    // parallel integrate velocities and positions
     loop.parfor(0, s.nbpart, [&](size_t i) {
       apply_force(s, i, dt);
       update_position(s, i, dt);
     });
   }
-  
-  double end = omp_get_wtime(); // added: end timing
-  std::cout << "Elapsed time: " << (end - start) << " seconds\n"; // added: simple runtime print
 
-  //dump_state(s);  
-
+  double end = omp_get_wtime();
+  std::cout << "Elapsed time: " << (end - start) << " seconds\n";
 
   return 0;
 }
